@@ -1,0 +1,197 @@
+import Mathlib.Data.Nat.Lattice
+import Mathlib.Data.Finset.Lattice.Basic
+import Mathlib.Data.Set.Finite.Basic
+
+/-- Simple types -/
+inductive Ty : Type
+/-- The unit type. -/
+| unit
+/-- The empty type. -/
+| empty
+/-- A product type `A × B`. -/
+| prod (A B : Ty)
+/-- A coproduct type `A + B`. -/
+| coprod (A B : Ty)
+
+/-- Untyped SSA expressions -/
+inductive Tm : Type
+/-- A named free variable. -/
+| fv (x : String)
+/-- A bound variable, represented using a de Bruijn index. -/
+| bv (i : ℕ)
+/-- A unary let-binding -/
+| let₁ (p e : Tm)
+/-- The unique value of the unit type. -/
+| null
+/-- A pair `(a, b)`. -/
+| pair (lhs rhs : Tm)
+/-- A binary let-binding -/
+| let₂ (p e : Tm)
+/-- A left injection -/
+| inl (e : Tm)
+/-- A right injection -/
+| inr (e : Tm)
+/-- A case expression -/
+| case (e l r : Tm)
+
+/-- The _binding depth_ of an SSA expression `t`
+
+  This is defined to be the minimal `k` such that `t` is closed at level `k`.
+
+  We say `t` is closed at level `k` if and only if all unbound de Bruijn indices in `t` are `< n`.
+  In particular, the following are equivalent:
+  - `t` is locally closed
+  - `t` is closed at level 0,  i.e. it does not contain any unbound de Bruijn indices.
+  - `t` has binding depth 0 -/
+def Tm.bvi : Tm → ℕ
+| .fv _ => 0
+| .bv i => i + 1
+| .let₁ _ e => bvi e - 1
+| .null => 0
+| .pair lhs rhs => bvi lhs ⊔ bvi rhs
+| .let₂ _ e => bvi e - 2
+| .inl e => bvi e
+| .inr e => bvi e
+| .case e l r => bvi e ⊔ (bvi l - 1) ⊔ (bvi r - 1)
+
+/-- The set of free variables appearing in an STLC term -/
+def Tm.fvs : Tm → Finset String
+| .fv x => {x}
+| .bv _ => ∅
+| .null => ∅
+| .let₁ p e => fvs p ∪ fvs e
+| .pair lhs rhs => fvs lhs ∪ fvs rhs
+| .let₂ p e => fvs p ∪ fvs e
+| .inl e => fvs e
+| .inr e => fvs e
+| .case e l r => fvs e ∪ fvs l ∪ fvs r
+
+/-- Weaken under `n` binders -/
+def Tm.wkUnder (n : ℕ) : Tm → Tm
+| .fv x => .fv x
+| .bv i => if i < n then .bv i else .bv (i + 1)
+| .let₁ p e => .let₁ (wkUnder n p) (wkUnder (n + 1) e)
+| .null => .null
+| .pair lhs rhs => .pair (wkUnder n lhs) (wkUnder n rhs)
+| .let₂ p e => .let₂ (wkUnder n p) (wkUnder (n + 2) e)
+| .inl e => .inl (wkUnder n e)
+| .inr e => .inr (wkUnder n e)
+| .case e l r => .case (wkUnder n e) (wkUnder (n + 1) l) (wkUnder (n + 1) r)
+
+prefix:70 "↑₀" => Tm.wkUnder 0
+
+/-- Substitute the bound variable under `n` binders -/
+def Tm.substUnder (n : ℕ) (a : Tm) : Tm → Tm
+| .fv x => .fv x
+| .bv i => if i < n then .bv i else if i = n then a else .bv (i - 1)
+| .null => .null
+| .let₁ p e => .let₁ (substUnder n a p) (substUnder (n + 1) (↑₀ a) e)
+| .pair lhs rhs => .pair (substUnder n a lhs) (substUnder n a rhs)
+| .let₂ p e => .let₂ (substUnder n a p) (substUnder (n + 2) (↑₀ (↑₀ a)) e)
+| .inl e => .inl (substUnder n a e)
+| .inr e => .inr (substUnder n a e)
+| .case e l r
+  => .case (substUnder n a e) (substUnder (n + 1) (↑₀ a) l) (substUnder (n + 1) (↑₀ a) r)
+
+instance Tm.instPow : Pow Tm Tm where
+  pow b a := substUnder 0 a b
+
+instance Tm.instCoeVar : Coe String Tm where
+  coe x := .fv x
+
+instance Tm.instPowVar : Pow Tm String where
+  pow b x := b^(Tm.fv x)
+
+theorem Tm.bvi_le_substUnder_var (n : ℕ) (x : String) (b : Tm)
+  : bvi b ≤ (n + 1) ⊔ (bvi (substUnder n x b) + 1)
+  := by induction b generalizing n with
+  | _ =>
+    simp only [
+      bvi, substUnder, wkUnder, Nat.max_assoc, Nat.add_max_add_right, sup_le_iff,
+      Nat.sub_le_iff_le_add
+    ]
+    grind [bvi]
+
+theorem Tm.pow_def (b : Tm) (a : Tm) : b ^ a = substUnder 0 a b := rfl
+
+theorem Tm.pow_var_def (x : String) (b : Tm) : b ^ x = substUnder 0 x b := rfl
+
+theorem Tm.bvi_le_subst_var (x : String) (b : Tm)
+  : bvi b ≤ bvi (b ^ x) + 1
+  := by convert bvi_le_substUnder_var 0 x b using 1; simp [Tm.pow_var_def]
+
+theorem Tm.bvi_substUnder_var_le (n : ℕ) (x : String) (b : Tm)
+  : bvi (substUnder n x b) ≤ n ⊔ (bvi b - 1)
+  := by induction b generalizing n with
+  | _ =>
+    simp [bvi, substUnder, wkUnder, Nat.sub_add_eq_max]
+    repeat rw [<-Nat.sub_max_sub_right, le_max_iff]
+    try simp only [le_sup_iff] at *
+    grind
+
+theorem Tm.bvi_subst_var_le (x : String) (b : Tm) : bvi (b ^ x) ≤ bvi b - 1
+  := by convert b.bvi_substUnder_var_le 0 x using 1; simp
+
+theorem Tm.subst_var_lc {x : String} {b : Tm} : bvi (b ^ x) = 0 ↔ bvi b - 1 = 0
+  := by have h := b.bvi_le_subst_var x; have h' := b.bvi_subst_var_le x; omega
+
+/-- A typing context mapping variables `x` to types `A`
+
+    Supports shadowing: `Γ, x : A, Δ, x : B` maps `x` to `B` -/
+inductive Ctx : Type
+/-- The empty context -/
+| nil
+/-- Append a variable to a context -/
+| cons (Γ : Ctx) (x : String) (A : Ty)
+
+/-- `Γ` maps variable `x : String` to type `A : Ty` -/
+inductive Ctx.Var : Ctx → Ty → String → Type
+| here {Γ : Ctx} {A : Ty} {x : String} : Ctx.Var (Ctx.cons Γ x A) A x
+| there {Γ : Ctx} {A B : Ty} {x y : String}
+  : x ≠ y → Ctx.Var Γ A x → Ctx.Var (Ctx.cons Γ y B) A x
+
+instance Ctx.Var.instSubsingleton {Γ A x} : Subsingleton (Var Γ A x) where
+  allEq a b := by
+    induction a with
+    | here => cases b with | here => rfl | there => contradiction
+    | there _ _ I => cases b with
+      | here => contradiction
+      | there => exact (congrArg _ (I _))
+
+theorem Ctx.Var.disjoint {Γ A B x} (hA : Var Γ A x) (hB : Var Γ B x) : A = B := by
+  induction hA with
+  | here => cases hB with | here => rfl | there => contradiction
+  | there _ _ I => cases hB with
+    | here => contradiction
+    | there _ hB => exact I hB
+
+-- /-- Locally nameless typing derivations for the simply-typed lambda calculus -/
+-- inductive Ctx.Deriv : Ctx → Ty → Tm → Type
+--   | var {Γ A x} : Var Γ A x → Deriv Γ A x
+--   | null {Γ} : Deriv Γ .unit .null
+--   | abs {Γ A B b} {L : Finset String}
+--     : (∀x ∉ L, Deriv (cons Γ x A) B (b^x))
+--     → Deriv Γ (.arr A B) (.abs A b)
+--   | pair {Γ A B a b}
+--     : Deriv Γ A a
+--     → Deriv Γ B b
+--     → Deriv Γ (.prod A B) (.pair a b)
+--   | fst {Γ A B p}
+--     : Deriv Γ (.prod A B) p
+--     → Deriv Γ A (.fst p)
+--   | snd {Γ A B p}
+--     : Deriv Γ (.prod A B) p
+--     → Deriv Γ B (.snd p)
+
+-- notation Γ " ⊢ " a " : " A => Ctx.Deriv Γ A a
+
+theorem Tm.subst_var_lc_cf {L : Finset String} {b : Tm} : (∀x ∉ L, bvi (b ^ x) = 0) ↔ bvi b - 1 = 0
+  := by
+  simp only [subst_var_lc]
+  exact ⟨fun h => have ⟨x, hx⟩ := L.exists_notMem; h x hx, fun h _ _ => h⟩
+
+-- theorem Ctx.Deriv.lc {Γ a A} (ha : Γ ⊢ a : A) : a.bvi = 0
+--   := by induction ha with
+--   | _ =>
+--     (try simp only [Tm.subst_var_lc_cf] at *)
+--     grind [Tm.bvi]
