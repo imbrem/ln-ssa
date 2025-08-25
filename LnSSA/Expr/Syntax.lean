@@ -124,10 +124,11 @@ theorem Tm.bvi_substUnder_var_le (n : ℕ) (x : String) (b : Tm)
   : bvi (substUnder n x b) ≤ n ⊔ (bvi b - 1)
   := by induction b generalizing n with
   | _ =>
-    simp [bvi, substUnder, wkUnder, Nat.sub_add_eq_max]
-    repeat rw [<-Nat.sub_max_sub_right, le_max_iff]
-    try simp only [le_sup_iff] at *
-    grind
+    simp [bvi, substUnder, wkUnder, Nat.sub_add_eq_max] <;> {
+      repeat rw [<-Nat.sub_max_sub_right, le_max_iff]
+      try simp only [le_sup_iff] at *
+      grind [bvi]
+    }
 
 theorem Tm.bvi_subst_var_le (x : String) (b : Tm) : bvi (b ^ x) ≤ bvi b - 1
   := by convert b.bvi_substUnder_var_le 0 x using 1; simp
